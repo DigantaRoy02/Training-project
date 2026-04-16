@@ -1,0 +1,15 @@
+{
+  "/api": {
+    "target": "http://localhost:9090",
+    "secure": false,
+    "changeOrigin": true,
+    "logLevel": "info"
+  },
+  "/warehouse": {
+    "target": "http://localhost:9090",
+    "secure": false,
+    "changeOrigin": true,
+    "pathRewrite": { "^/warehouse": "" },
+    "logLevel": "info"
+  }
+}
