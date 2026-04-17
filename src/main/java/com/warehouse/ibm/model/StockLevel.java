@@ -15,8 +15,11 @@ public class StockLevel {
 
     private Integer quantity;
 
-    @Column(name = "min_quantity")
-    private Integer minQuantity;
+    @Column(name = "low_stock_quantity")
+    private Integer lowStockQuantity;
+
+    @Column(name = "out_of_stock_quantity")
+    private Integer outOfStockQuantity;
 
     @Column(name = "below_min_date")
     private LocalDate belowMinDate;

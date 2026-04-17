@@ -1,5 +1,7 @@
-import { Injectable, computed, signal } from '@angular/core';
+import { inject, Injectable, computed, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
+import { InventoryService } from './inventory.service';
+import { DashboardService } from './dashboard.service';
 
 export type ReorderStatus = 'PENDING' | 'APPROVED' | 'SHIPPED' | 'RECEIVED';
 
@@ -53,6 +55,9 @@ export class ReorderService {
   readonly shippedCount  = computed(() => this.orders().filter(o => o.status === 'SHIPPED').length);
   readonly receivedCount = computed(() => this.orders().filter(o => o.status === 'RECEIVED').length);
 
+  private readonly inventoryService = inject(InventoryService);
+  private readonly dashboardService = inject(DashboardService);
+
   constructor(private http: HttpClient) {}
 
   load(): void {
@@ -67,12 +72,24 @@ export class ReorderService {
   }
 
   createManual(itemId: number, quantity: number): void {
-    this.http.post<RawReorder>(`${this.base}/reorders/manual`, {
+    console.log('[ReorderService] createManual called - itemId:', itemId, 'qty:', quantity);
+    this.http.post<RawReorder[]>(`${this.base}/reorders/manual`, {
       item: { itemId },
       reorderQuantity: quantity,
     }).subscribe({
-      next: (created) => {
-        this.orders.update(list => [this.mapReorder(created), ...list]);
+      next: (list) => {
+        console.log('[ReorderService] createManual response:', list);
+        if (Array.isArray(list)) {
+          this.orders.set(list.map(r => this.mapReorder(r)));
+        } else {
+          // Fallback: reload from backend
+          this.load();
+        }
+      },
+      error: (err) => {
+        console.error('[ReorderService] createManual error:', err);
+        // Reload to sync in case it actually saved
+        this.load();
       },
     });
   }
@@ -91,6 +108,11 @@ export class ReorderService {
         // Sync with backend response if available
         if (Array.isArray(list)) {
           this.orders.set(list.map(r => this.mapReorder(r)));
+        }
+        // When RECEIVED, stock levels changed — reload inventory & dashboard
+        if (status === 'RECEIVED') {
+          this.inventoryService.load();
+          this.dashboardService.load();
         }
       },
       error: (err) => {

@@ -33,9 +33,9 @@ public class DashboardController {
         stats.put("categories", 0);
 
         try (Connection conn = warehouseDS.getConnection()) {
-            // Low stock: items where quantity < min_quantity
+            // Low stock + out of stock items
             try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT COUNT(*) FROM stock_level WHERE quantity < min_quantity")) {
+                    "SELECT COUNT(*) FROM stock_level WHERE stock_status IN ('LOW_STOCK', 'OUT_OF_STOCK')")) {
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) stats.put("lowStock", rs.getInt(1));
                 }
@@ -134,11 +134,13 @@ public class DashboardController {
 
             String name = sl.getItem().getItemName();
             int qty = sl.getQuantity() != null ? sl.getQuantity() : 0;
-            int minQty = sl.getMinQuantity() != null ? sl.getMinQuantity() : 0;
+            int lowQty = sl.getLowStockQuantity() != null ? sl.getLowStockQuantity() : 0;
+            int outQty = sl.getOutOfStockQuantity() != null ? sl.getOutOfStockQuantity() : 0;
 
-            itemAgg.merge(name, new int[]{qty, minQty}, (old, nw) -> {
+            itemAgg.merge(name, new int[]{qty, lowQty, outQty}, (old, nw) -> {
                 old[0] += nw[0];
                 old[1] = Math.max(old[1], nw[1]);
+                old[2] = Math.max(old[2], nw[2]);
                 return old;
             });
 
@@ -158,7 +160,8 @@ public class DashboardController {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("itemName", e.getKey());
                     m.put("quantity", e.getValue()[0]);
-                    m.put("minQuantity", e.getValue()[1]);
+                    m.put("lowStockQuantity", e.getValue()[1]);
+                    m.put("outOfStockQuantity", e.getValue()[2]);
                     m.put("bins", itemBins.getOrDefault(e.getKey(), List.of()));
                     return m;
                 })

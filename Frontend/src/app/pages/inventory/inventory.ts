@@ -383,7 +383,7 @@ type SortDir = 'asc' | 'desc';
                            focus:border-transparent transition-all
                            [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     [ngModel]="reorderQty()"
-                    (ngModelChange)="reorderQty.set($event)"
+                    (ngModelChange)="clampReorderQty($event)"
                   />
                 </div>
                 <button (click)="adjustReorderQty(1)"
@@ -646,19 +646,13 @@ export class Inventory implements OnInit {
     if (next >= 0) this.editQty.set(next);
   }
 
-  /** Save quantity — currently updates in-memory; will call PUT /api/inventory/:id with backend */
+  /** Save quantity — persists to database and updates frontend */
   saveQuantity(item: InventoryItem) {
     const newQty = Math.max(0, Math.round(this.editQty()));
-    // TODO: Replace with HTTP PUT call when Spring Boot is connected
-    this.inventoryService.items.update(list =>
-      list.map(i => i.id === item.id ? {
-        ...i,
-        quantity: newQty,
-        totalValue: newQty * i.unitPrice,
-        status: (newQty === 0 ? 'Out of Stock' : newQty <= i.reorderLevel ? 'Low Stock' : 'In Stock') as InventoryItem['status'],
-        lastUpdated: new Date().toISOString().slice(0, 10),
-      } : i)
-    );
+    this.inventoryService.updateQuantity(item.itemId, item.binId, newQty, () => {
+      // Reload reorders in case auto reorder was triggered
+      this.reorderService.load();
+    });
     this.editingItemId.set(null);
   }
 
@@ -686,8 +680,16 @@ export class Inventory implements OnInit {
   }
 
   adjustReorderQty(delta: number) {
-    const next = this.reorderQty() + delta;
+    const item = this.reorderItem();
+    const maxQty = item ? Math.max(0, this.reorderTargetStock() - item.quantity) : Infinity;
+    const next = Math.min(this.reorderQty() + delta, maxQty);
     if (next >= 1) this.reorderQty.set(next);
+  }
+
+  clampReorderQty(val: number) {
+    const item = this.reorderItem();
+    const maxQty = item ? Math.max(1, this.reorderTargetStock() - item.quantity) : Infinity;
+    this.reorderQty.set(Math.max(1, Math.min(val, maxQty)));
   }
 
   /** Confirm reorder — sends to ReorderService, shows toast */

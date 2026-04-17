@@ -54,13 +54,22 @@ public class StockTransactionService {
             stockLevel.setQuantity(stockLevel.getQuantity() - tx.getQuantity());
         }
 
-        if (stockLevel.getQuantity() < stockLevel.getMinQuantity()) {
-            stockLevel.setStockStatus("LOW");
+        int qty = stockLevel.getQuantity();
+        int outQty = stockLevel.getOutOfStockQuantity() != null ? stockLevel.getOutOfStockQuantity() : 0;
+        int lowQty = stockLevel.getLowStockQuantity() != null ? stockLevel.getLowStockQuantity() : 0;
+
+        if (qty <= outQty) {
+            stockLevel.setStockStatus("OUT_OF_STOCK");
+            if (stockLevel.getBelowMinDate() == null) {
+                stockLevel.setBelowMinDate(LocalDate.now());
+            }
+        } else if (qty <= lowQty) {
+            stockLevel.setStockStatus("LOW_STOCK");
             if (stockLevel.getBelowMinDate() == null) {
                 stockLevel.setBelowMinDate(LocalDate.now());
             }
         } else {
-            stockLevel.setStockStatus("OK");
+            stockLevel.setStockStatus("HEALTHY");
             stockLevel.setBelowMinDate(null);
         }
 

@@ -3,6 +3,8 @@ import { HttpClient } from '@angular/common/http';
 
 export interface InventoryItem {
   id: string;
+  itemId: number;
+  binId: number;
   name: string;
   sku: string;
   category: string;
@@ -19,6 +21,7 @@ export interface InventoryItem {
 
 export interface Supplier {
   id: string;
+  numericId: number;
   name: string;
   contactPerson: string;
   email: string;
@@ -38,7 +41,8 @@ export interface Supplier {
 interface RawStockLevel {
   id: { itemId: number; binId: number };
   quantity: number;
-  minQuantity: number;
+  lowStockQuantity: number;
+  outOfStockQuantity: number;
   belowMinDate: string | null;
   stockStatus: string;
   item: {
@@ -80,6 +84,7 @@ export class InventoryService {
 
   readonly items = signal<InventoryItem[]>([]);
   readonly suppliers = signal<Supplier[]>([]);
+  readonly bins = signal<{ binId: number; binCode: string; zone: string; capacity: number }[]>([]);
   readonly loading = signal(true);
 
   readonly categories = computed(() =>
@@ -100,41 +105,74 @@ export class InventoryService {
     this.http.get<RawSupplier[]>(`${this.base}/suppliers`).subscribe({
       next: (raw) => this.suppliers.set(raw.map(s => this.mapSupplier(s))),
     });
+    this.http.get<{ binId: number; binCode: string; zone: string; capacity: number }[]>(`${this.base}/bins`).subscribe({
+      next: (bins) => this.bins.set(bins),
+    });
   }
 
-  updateQuantity(item: InventoryItem, newQty: number): void {
-    const newStatus: InventoryItem['status'] =
-      newQty === 0 ? 'Out of Stock'
-        : newQty <= item.reorderLevel ? 'Low Stock'
-        : 'In Stock';
+  updateQuantity(itemId: number, binId: number, newQty: number, onComplete?: () => void): void {
+    // Optimistic UI update
+    const idStr = `ITM-${String(itemId).padStart(3, '0')}`;
     this.items.update(list =>
-      list.map(i => i.id === item.id
-        ? { ...i, quantity: newQty, totalValue: newQty * i.unitPrice, status: newStatus }
-        : i
-      )
+      list.map(i => {
+        if (i.id !== idStr) return i;
+        const status: InventoryItem['status'] =
+          newQty <= 0 ? 'Out of Stock'
+            : newQty <= i.reorderLevel ? 'Low Stock'
+            : 'In Stock';
+        return { ...i, quantity: newQty, totalValue: newQty * i.unitPrice, status };
+      })
     );
+    // Persist to database
+    this.http.put(`${this.base}/stock-levels/${itemId}/${binId}/quantity?quantity=${newQty}`, {}).subscribe({
+      next: () => {
+        this.load();
+        if (onComplete) onComplete();
+      },
+      error: (err) => {
+        console.error('updateQuantity error', err);
+        this.load();
+      },
+    });
+  }
+
+  addItem(payload: {
+    itemName: string; sku: string; unitPrice: number; categoryName: string;
+    quantity: number; lowStockQuantity: number; outOfStockQuantity: number;
+    binCode: string; supplierId: number | null;
+  }): Promise<boolean> {
+    return new Promise(resolve => {
+      this.http.post<{ success: boolean }>(`${this.base}/stock-levels/add-item`, payload).subscribe({
+        next: () => { this.load(); resolve(true); },
+        error: (err) => { console.error('addItem error', err); resolve(false); },
+      });
+    });
   }
 
   private mapStockLevel(sl: RawStockLevel): InventoryItem {
-    const qty    = sl.quantity ?? 0;
-    const minQty = sl.minQuantity ?? 0;
-    const price  = sl.item?.unitPrice ?? 0;
-    const aisle  = sl.bin?.aisle ?? '';
-    const rack   = sl.bin?.rack ?? '';
-    const lvl    = sl.bin?.level ?? '';
-    const binCode = sl.bin?.binCode ?? '';
+    const qty       = sl.quantity ?? 0;
+    const lowQty    = sl.lowStockQuantity ?? 0;
+    const outQty    = sl.outOfStockQuantity ?? 0;
+    const price     = sl.item?.unitPrice ?? 0;
+    const aisle     = sl.bin?.aisle ?? '';
+    const rack      = sl.bin?.rack ?? '';
+    const lvl       = sl.bin?.level ?? '';
+    const binCode   = sl.bin?.binCode ?? '';
 
+    const backendStatus = sl.stockStatus ?? '';
     let status: InventoryItem['status'] = 'In Stock';
-    if (qty === 0) status = 'Out of Stock';
-    else if (qty <= minQty) status = 'Low Stock';
+    if (backendStatus === 'OUT_OF_STOCK' || qty <= outQty) status = 'Out of Stock';
+    else if (backendStatus === 'LOW_STOCK' || qty <= lowQty) status = 'Low Stock';
 
     return {
       id:           `ITM-${String(sl.item?.itemId ?? 0).padStart(3, '0')}`,
-      name:         sl.item?.itemName ?? '�',
+      itemId:       sl.item?.itemId ?? 0,
+      binId:        sl.id?.binId ?? 0,
+      name:         sl.item?.itemName ?? '\u{FFFD}',
       sku:          sl.item?.sku ?? '',
-      category:     sl.item?.category?.categoryName ?? '�',
+      category:     sl.item?.category?.categoryName ?? '\u{FFFD}',
       quantity:     qty,
-      reorderLevel: minQty,
+      reorderLevel: lowQty,
       unitPrice:    price,
       totalValue:   qty * price,
       status,
@@ -148,6 +186,7 @@ export class InventoryService {
   private mapSupplier(s: RawSupplier): Supplier {
     return {
       id:            `SUP-${String(s.supplierId).padStart(3, '0')}`,
+      numericId:     s.supplierId,
       name:          s.supplierName ?? '',
       contactPerson: s.contactPerson ?? '',
       email:         s.contactEmail ?? '',

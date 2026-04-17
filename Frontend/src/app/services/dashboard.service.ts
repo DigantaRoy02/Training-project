@@ -25,7 +25,8 @@ export interface BinInfo {
 export interface CategoryItem {
   itemName: string;
   quantity: number;
-  minQuantity: number;
+  lowStockQuantity: number;
+  outOfStockQuantity: number;
   bins: BinInfo[];
 }
 

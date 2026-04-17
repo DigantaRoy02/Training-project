@@ -32,7 +32,9 @@ public class ReorderController {
     @PostMapping("/manual")
     public ResponseEntity<?> manual(@RequestBody Reorder reorder) {
         try {
-            return ResponseEntity.ok(service.createManualReorder(reorder));
+            service.createManualReorder(reorder);
+            // Return the full refreshed list in DTO format
+            return ResponseEntity.ok(service.getAllDTO());
         } catch (Exception e) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", e.getMessage()));

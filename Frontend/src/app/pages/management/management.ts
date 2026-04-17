@@ -89,13 +89,34 @@ import { InventoryService, Supplier } from '../../services/inventory.service';
                   [ngModel]="formQuantity()" (ngModelChange)="formQuantity.set($event)" />
               </div>
               <div>
-                <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Min Qty (Reorder Level)</label>
+                <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">SKU</label>
+                <input type="text" placeholder="e.g. WH-001"
+                  class="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white
+                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                         placeholder:text-gray-400 font-mono"
+                  [ngModel]="formSku()" (ngModelChange)="formSku.set($event)" />
+              </div>
+            </div>
+
+            <!-- Low Stock & Out of Stock thresholds -->
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Low Stock Qty</label>
                 <input type="number" placeholder="0" min="0"
                   class="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white
                          focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
                          placeholder:text-gray-400
                          [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                  [ngModel]="formReorderLevel()" (ngModelChange)="formReorderLevel.set($event)" />
+                  [ngModel]="formLowStockQty()" (ngModelChange)="formLowStockQty.set($event)" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Out of Stock Qty</label>
+                <input type="number" placeholder="0" min="0"
+                  class="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white
+                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                         placeholder:text-gray-400
+                         [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  [ngModel]="formOutOfStockQty()" (ngModelChange)="formOutOfStockQty.set($event)" />
               </div>
             </div>
 
@@ -112,11 +133,15 @@ import { InventoryService, Supplier } from '../../services/inventory.service';
               </div>
               <div>
                 <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Bin Location</label>
-                <input type="text" placeholder="e.g. A1-S3"
+                <select
                   class="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white
-                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                         placeholder:text-gray-400 font-mono"
-                  [ngModel]="formBinLocation()" (ngModelChange)="formBinLocation.set($event)" />
+                         focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+                  [ngModel]="formBinCode()" (ngModelChange)="formBinCode.set($event)">
+                  <option value="">Select a bin</option>
+                  @for (bin of inventoryService.bins(); track bin.binId) {
+                    <option [value]="bin.binCode">{{ bin.binCode }} — {{ bin.zone }} (cap: {{ bin.capacity }})</option>
+                  }
+                </select>
               </div>
             </div>
 
@@ -133,8 +158,8 @@ import { InventoryService, Supplier } from '../../services/inventory.service';
                   <span class="px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-600">{{ formCategory() }}</span>
                 </div>
                 <div class="flex items-center justify-between text-sm">
-                  <span class="text-gray-500">Qty / Min</span>
-                  <span class="font-medium text-gray-900">{{ formQuantity() || 0 }} / {{ formReorderLevel() || 0 }}</span>
+                  <span class="text-gray-500">Qty / Low / OOS</span>
+                  <span class="font-medium text-gray-900">{{ formQuantity() || 0 }} / {{ formLowStockQty() || 0 }} / {{ formOutOfStockQty() || 0 }}</span>
                 </div>
                 <div class="flex items-center justify-between text-sm">
                   <span class="text-gray-500">Total Value</span>
@@ -381,10 +406,12 @@ export class Management implements OnInit {
   readonly formSupplier = signal('');
   readonly formCategory = signal('');
   readonly formItemName = signal('');
+  readonly formSku = signal('');
   readonly formQuantity = signal<number | null>(null);
-  readonly formReorderLevel = signal<number | null>(null);
+  readonly formLowStockQty = signal<number | null>(null);
+  readonly formOutOfStockQty = signal<number | null>(null);
   readonly formUnitPrice = signal<number | null>(null);
-  readonly formBinLocation = signal('');
+  readonly formBinCode = signal('');
 
   // ── Selected supplier object ──
   readonly selectedSupplier = computed<Supplier | null>(() => {
@@ -402,19 +429,22 @@ export class Management implements OnInit {
 
   readonly previewStatus = computed(() => {
     const qty = this.formQuantity() ?? 0;
-    const min = this.formReorderLevel() ?? 0;
-    if (qty === 0) return 'Out of Stock';
-    if (qty <= min) return 'Low Stock';
+    const low = this.formLowStockQty() ?? 0;
+    const oos = this.formOutOfStockQty() ?? 0;
+    if (qty <= oos) return 'Out of Stock';
+    if (qty <= low) return 'Low Stock';
     return 'In Stock';
   });
 
   readonly isFormValid = computed(() =>
     this.formItemName().trim().length > 0 &&
+    this.formSku().trim().length > 0 &&
     this.formCategory().length > 0 &&
     (this.formQuantity() ?? 0) >= 0 &&
-    (this.formReorderLevel() ?? -1) >= 0 &&
+    (this.formLowStockQty() ?? -1) >= 0 &&
+    (this.formOutOfStockQty() ?? -1) >= 0 &&
     (this.formUnitPrice() ?? 0) > 0 &&
-    this.formBinLocation().trim().length > 0
+    this.formBinCode().length > 0
   );
 
   // ── Toast ──
@@ -434,25 +464,47 @@ export class Management implements OnInit {
     }
   }
 
-  // ── Add item to inventory ──
-  addItem() {
+  // ── Add item to inventory (persists to database) ──
+  async addItem() {
     if (!this.isFormValid()) return;
 
-    this.showToast(
-      'Item Added to Inventory!',
-      `${this.formItemName().trim()} — ${this.formQuantity()} units at $${(+(this.formUnitPrice() ?? 0)).toFixed(2)} in bin ${this.formBinLocation().trim().toUpperCase()}`
-    );
-    this.resetForm();
+    const supplierId = this.formSupplier()
+      ? this.selectedSupplier()?.numericId ?? null
+      : null;
+
+    const success = await this.inventoryService.addItem({
+      itemName: this.formItemName().trim(),
+      sku: this.formSku().trim(),
+      unitPrice: +(this.formUnitPrice() ?? 0),
+      categoryName: this.formCategory(),
+      quantity: +(this.formQuantity() ?? 0),
+      lowStockQuantity: +(this.formLowStockQty() ?? 0),
+      outOfStockQuantity: +(this.formOutOfStockQty() ?? 0),
+      binCode: this.formBinCode(),
+      supplierId,
+    });
+
+    if (success) {
+      this.showToast(
+        'Item Added to Inventory!',
+        `${this.formItemName().trim()} — ${this.formQuantity()} units at $${(+(this.formUnitPrice() ?? 0)).toFixed(2)} in bin ${this.formBinCode()}`
+      );
+      this.resetForm();
+    } else {
+      this.showToast('Error', 'Failed to add item. Check console for details.');
+    }
   }
 
   resetForm() {
     this.formSupplier.set('');
     this.formCategory.set('');
     this.formItemName.set('');
+    this.formSku.set('');
     this.formQuantity.set(null);
-    this.formReorderLevel.set(null);
+    this.formLowStockQty.set(null);
+    this.formOutOfStockQty.set(null);
     this.formUnitPrice.set(null);
-    this.formBinLocation.set('');
+    this.formBinCode.set('');
   }
 
   showToast(title: string, message: string) {

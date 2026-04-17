@@ -226,18 +226,18 @@ import { DashboardService, CategoryItem } from '../../services/dashboard.service
                     {{ item.itemName }}
                   </span>
                   <span class="text-xs font-bold tabular-nums shrink-0 ml-2"
-                    [class.text-emerald-600]="item.quantity >= item.minQuantity"
-                    [class.text-red-500]="item.quantity < item.minQuantity && item.quantity > 0"
-                    [class.text-red-700]="item.quantity === 0"
+                    [class.text-emerald-600]="item.quantity >= item.lowStockQuantity"
+                    [class.text-amber-500]="item.quantity < item.lowStockQuantity && item.quantity > item.outOfStockQuantity"
+                    [class.text-red-700]="item.quantity <= item.outOfStockQuantity"
                   >
-                    {{ item.quantity }} / {{ item.minQuantity }}
+                    {{ item.quantity }} / {{ item.lowStockQuantity }}
                   </span>
                 </div>
                 <div class="w-full h-7 bg-gray-50 rounded-lg overflow-hidden relative">
                   <div class="h-full rounded-lg hbar-animated flex items-center relative overflow-hidden transition-all"
-                    [class.bar-emerald]="item.quantity >= item.minQuantity"
-                    [class.bar-red]="item.quantity < item.minQuantity && item.quantity > 0"
-                    [class.bar-red-dark]="item.quantity === 0"
+                    [class.bar-emerald]="item.quantity >= item.lowStockQuantity"
+                    [class.bar-red]="item.quantity < item.lowStockQuantity && item.quantity > item.outOfStockQuantity"
+                    [class.bar-red-dark]="item.quantity <= item.outOfStockQuantity"
                     [ngStyle]="{ '--hbar-w': (itemBarPercent(item) + '%') }"
                   >
                     <div class="absolute inset-0 shimmer-overlay"></div>
@@ -245,19 +245,19 @@ import { DashboardService, CategoryItem } from '../../services/dashboard.service
                   <!-- Min quantity marker line -->
                   @if (maxItemCapacity() > 0) {
                     <div class="absolute top-0 bottom-0 w-0.5 bg-gray-400 opacity-40"
-                      [ngStyle]="{ 'left': (item.minQuantity / maxItemCapacity() * 100) + '%' }">
+                      [ngStyle]="{ 'left': (item.lowStockQuantity / maxItemCapacity() * 100) + '%' }">
                     </div>
                   }
                 </div>
                 <!-- Status + Bin info -->
                 <div class="flex items-center justify-between mt-0.5">
                   <div class="flex items-center gap-1.5">
-                    @if (item.quantity === 0) {
+                    @if (item.quantity <= item.outOfStockQuantity) {
                       <span class="text-[10px] font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">OUT OF STOCK</span>
-                    } @else if (item.quantity < item.minQuantity) {
+                    } @else if (item.quantity <= item.lowStockQuantity) {
                       <span class="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">LOW STOCK</span>
                     } @else {
-                      <span class="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">OK</span>
+                      <span class="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">HEALTHY</span>
                     }
                   </div>
                   <div class="flex items-center gap-1.5 flex-wrap justify-end">
@@ -387,7 +387,7 @@ export class Dashboard implements OnInit {
   readonly maxItemCapacity = computed(() => {
     const items = this.svc.categoryItems();
     if (!items.length) return 1;
-    return Math.max(...items.map(i => Math.max(i.quantity, i.minQuantity)));
+    return Math.max(...items.map(i => Math.max(i.quantity, i.lowStockQuantity)));
   });
 
   /** Calculate bar width % for an item: quantity out of maxItemCapacity */

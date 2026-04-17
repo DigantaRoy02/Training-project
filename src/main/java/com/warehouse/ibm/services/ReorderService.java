@@ -72,10 +72,16 @@ public class ReorderService {
     }
 
     public void checkAutoReorder(StockLevel stockLevel) {
-        if (stockLevel.getBelowMinDate() == null) return;
-        long days = ChronoUnit.DAYS.between(stockLevel.getBelowMinDate(), LocalDate.now());
-        if (days > 3) {
+        String status = stockLevel.getStockStatus();
+        if (status == null) return;
+        // Auto reorder for OUT_OF_STOCK immediately, or LOW_STOCK if below_min_date > 3 days
+        if ("OUT_OF_STOCK".equals(status)) {
             createAutoReorder(stockLevel);
+        } else if ("LOW_STOCK".equals(status) && stockLevel.getBelowMinDate() != null) {
+            long days = ChronoUnit.DAYS.between(stockLevel.getBelowMinDate(), LocalDate.now());
+            if (days > 3) {
+                createAutoReorder(stockLevel);
+            }
         }
     }
 
@@ -97,20 +103,69 @@ public class ReorderService {
         reorder.setTriggerType(TriggerType.AUTO);
         reorder.setStatus(OrderStatus.PENDING);
         reorder.setReorderDate(LocalDate.now());
-        reorder.setReorderQuantity(50 - stock.getQuantity());
+        // Auto reorder qty = 75% of bin capacity (rounded), minimum 1
+        int binCapacity = stock.getBin() != null && stock.getBin().getCapacity() != null
+                ? stock.getBin().getCapacity() : 100;
+        int reorderQty = (int) Math.round(binCapacity * 0.75);
+        reorder.setReorderQuantity(Math.max(1, reorderQty));
 
         return repo.save(reorder);
     }
 
-    public Reorder createManualReorder(Reorder reorder) {
-        List<OrderStatus> activeStatuses = List.of(OrderStatus.PENDING, OrderStatus.APPROVED, OrderStatus.SHIPPED);
-        if (repo.existsByItemAndStatusIn(reorder.getItem(), activeStatuses)) {
-            throw new RuntimeException("An active reorder already exists for this item");
+    public void createManualReorder(Reorder reorder) {
+        Integer itemId = reorder.getItem().getItemId();
+        int qty = reorder.getReorderQuantity() != null ? reorder.getReorderQuantity() : 0;
+
+        String warehouseKey = com.warehouse.ibm.config.WarehouseContext.get();
+        System.out.println("[ReorderService] createManualReorder - WarehouseContext=" + warehouseKey
+                + " itemId=" + itemId + " qty=" + qty);
+
+        try (Connection conn = warehouseDS.getConnection()) {
+            System.out.println("[ReorderService] createManualReorder - connected to catalog: " + conn.getCatalog());
+
+            // Check for existing active reorder for this item
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT COUNT(*) FROM reorder WHERE item_id = ? AND status IN ('PENDING','APPROVED','SHIPPED')")) {
+                ps.setInt(1, itemId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next() && rs.getInt(1) > 0) {
+                        throw new RuntimeException("An active reorder already exists for this item");
+                    }
+                }
+            }
+
+            // Find a supplier for this item
+            Integer supplierId = null;
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT supplier_id FROM supplier_items WHERE item_id = ? LIMIT 1")) {
+                ps.setInt(1, itemId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        supplierId = rs.getInt("supplier_id");
+                    }
+                }
+            }
+
+            // Insert the reorder
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "INSERT INTO reorder (reorder_id, item_id, supplier_id, reorder_quantity, reorder_date, trigger_type, status) " +
+                    "VALUES ((SELECT COALESCE(MAX(r.reorder_id),0)+1 FROM reorder r), ?, ?, ?, ?, 'MANUAL', 'APPROVED')")) {
+                ps.setInt(1, itemId);
+                if (supplierId != null) {
+                    ps.setInt(2, supplierId);
+                } else {
+                    ps.setNull(2, java.sql.Types.INTEGER);
+                }
+                ps.setInt(3, qty);
+                ps.setDate(4, java.sql.Date.valueOf(LocalDate.now()));
+                int rows = ps.executeUpdate();
+                System.out.println("[ReorderService] Manual reorder INSERT rows=" + rows);
+            }
+        } catch (SQLException e) {
+            System.err.println("[ReorderService] createManualReorder SQL error: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Failed to create manual reorder: " + e.getMessage(), e);
         }
-        reorder.setTriggerType(TriggerType.MANUAL);
-        reorder.setStatus(OrderStatus.APPROVED);
-        reorder.setReorderDate(LocalDate.now());
-        return repo.save(reorder);
     }
 
     /**
@@ -162,11 +217,22 @@ public class ReorderService {
                 System.out.println("[ReorderService] RECEIVED -> item_id=" + itemId + " qty=" + qty);
 
                 if (itemId > 0 && qty > 0) {
-                    // Simple UPDATE: quantity = quantity + qty
+                    // Update quantity and recalculate stock_status
                     try (PreparedStatement ps = conn.prepareStatement(
-                            "UPDATE stock_level SET quantity = quantity + ? WHERE item_id = ?")) {
+                            "UPDATE stock_level SET quantity = quantity + ?, " +
+                            "stock_status = CASE " +
+                            "  WHEN quantity + ? <= out_of_stock_quantity THEN 'OUT_OF_STOCK' " +
+                            "  WHEN quantity + ? <= low_stock_quantity THEN 'LOW_STOCK' " +
+                            "  ELSE 'HEALTHY' END, " +
+                            "below_min_date = CASE " +
+                            "  WHEN quantity + ? > low_stock_quantity THEN NULL " +
+                            "  ELSE below_min_date END " +
+                            "WHERE item_id = ?")) {
                         ps.setInt(1, qty);
-                        ps.setInt(2, itemId);
+                        ps.setInt(2, qty);
+                        ps.setInt(3, qty);
+                        ps.setInt(4, qty);
+                        ps.setInt(5, itemId);
                         int rows = ps.executeUpdate();
                         System.out.println("[ReorderService] stock_level updated rows=" + rows);
                     }
