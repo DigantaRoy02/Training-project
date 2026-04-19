@@ -3,8 +3,6 @@ package com.warehouse.ibm.model;
 import jakarta.persistence.*;
 import lombok.Data;
 
-import java.time.LocalDate;
-
 @Data
 @Entity
 @Table(name = "stock_level")
@@ -20,9 +18,6 @@ public class StockLevel {
 
     @Column(name = "out_of_stock_quantity")
     private Integer outOfStockQuantity;
-
-    @Column(name = "below_min_date")
-    private LocalDate belowMinDate;
 
     @Column(name = "stock_status")
     private String stockStatus;

@@ -43,7 +43,6 @@ interface RawStockLevel {
   quantity: number;
   lowStockQuantity: number;
   outOfStockQuantity: number;
-  belowMinDate: string | null;
   stockStatus: string;
   item: {
     itemId: number;
@@ -149,6 +148,18 @@ export class InventoryService {
     });
   }
 
+  purchaseItem(itemId: number, binId: number, quantity: number): Promise<{ success: boolean; newQuantity?: number; newStatus?: string; autoReordered?: boolean; error?: string }> {
+    return new Promise(resolve => {
+      this.http.post<any>(`${this.base}/stock-levels/purchase`, { itemId, binId, quantity }).subscribe({
+        next: (res) => { this.load(); resolve(res); },
+        error: (err) => {
+          console.error('purchaseItem error', err);
+          resolve({ success: false, error: err.error?.error || 'Purchase failed' });
+        },
+      });
+    });
+  }
+
   private mapStockLevel(sl: RawStockLevel): InventoryItem {
     const qty       = sl.quantity ?? 0;
     const lowQty    = sl.lowStockQuantity ?? 0;
@@ -179,7 +190,7 @@ export class InventoryService {
       binLocation:  `${aisle}${rack}-${lvl}`.replace(/^-|-$/g, '') || binCode,
       binCode,
       stockStatus:  sl.stockStatus ?? '',
-      lastUpdated:  sl.belowMinDate ?? '',
+      lastUpdated:  '',
     };
   }
 

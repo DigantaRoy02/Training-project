@@ -60,17 +60,10 @@ public class StockTransactionService {
 
         if (qty <= outQty) {
             stockLevel.setStockStatus("OUT_OF_STOCK");
-            if (stockLevel.getBelowMinDate() == null) {
-                stockLevel.setBelowMinDate(LocalDate.now());
-            }
         } else if (qty <= lowQty) {
             stockLevel.setStockStatus("LOW_STOCK");
-            if (stockLevel.getBelowMinDate() == null) {
-                stockLevel.setBelowMinDate(LocalDate.now());
-            }
         } else {
             stockLevel.setStockStatus("HEALTHY");
-            stockLevel.setBelowMinDate(null);
         }
 
         stockRepo.save(stockLevel);

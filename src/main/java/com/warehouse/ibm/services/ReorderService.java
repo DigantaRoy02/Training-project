@@ -11,7 +11,6 @@ import org.springframework.stereotype.Service;
 import javax.sql.DataSource;
 import java.sql.*;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Service
@@ -74,14 +73,9 @@ public class ReorderService {
     public void checkAutoReorder(StockLevel stockLevel) {
         String status = stockLevel.getStockStatus();
         if (status == null) return;
-        // Auto reorder for OUT_OF_STOCK immediately, or LOW_STOCK if below_min_date > 3 days
+        // Auto reorder only when OUT_OF_STOCK
         if ("OUT_OF_STOCK".equals(status)) {
             createAutoReorder(stockLevel);
-        } else if ("LOW_STOCK".equals(status) && stockLevel.getBelowMinDate() != null) {
-            long days = ChronoUnit.DAYS.between(stockLevel.getBelowMinDate(), LocalDate.now());
-            if (days > 3) {
-                createAutoReorder(stockLevel);
-            }
         }
     }
 
@@ -223,16 +217,12 @@ public class ReorderService {
                             "stock_status = CASE " +
                             "  WHEN quantity + ? <= out_of_stock_quantity THEN 'OUT_OF_STOCK' " +
                             "  WHEN quantity + ? <= low_stock_quantity THEN 'LOW_STOCK' " +
-                            "  ELSE 'HEALTHY' END, " +
-                            "below_min_date = CASE " +
-                            "  WHEN quantity + ? > low_stock_quantity THEN NULL " +
-                            "  ELSE below_min_date END " +
+                            "  ELSE 'HEALTHY' END " +
                             "WHERE item_id = ?")) {
                         ps.setInt(1, qty);
                         ps.setInt(2, qty);
                         ps.setInt(3, qty);
-                        ps.setInt(4, qty);
-                        ps.setInt(5, itemId);
+                        ps.setInt(4, itemId);
                         int rows = ps.executeUpdate();
                         System.out.println("[ReorderService] stock_level updated rows=" + rows);
                     }

@@ -47,19 +47,13 @@ public class StockLevelController {
                     "stock_status = CASE " +
                     "  WHEN ? <= out_of_stock_quantity THEN 'OUT_OF_STOCK' " +
                     "  WHEN ? <= low_stock_quantity THEN 'LOW_STOCK' " +
-                    "  ELSE 'HEALTHY' END, " +
-                    "below_min_date = CASE " +
-                    "  WHEN ? > low_stock_quantity THEN NULL " +
-                    "  WHEN below_min_date IS NOT NULL THEN below_min_date " +
-                    "  ELSE ? END " +
+                    "  ELSE 'HEALTHY' END " +
                     "WHERE item_id = ? AND bin_id = ?")) {
                 ps.setInt(1, quantity);
                 ps.setInt(2, quantity);
                 ps.setInt(3, quantity);
-                ps.setInt(4, quantity);
-                ps.setDate(5, java.sql.Date.valueOf(LocalDate.now()));
-                ps.setInt(6, itemId);
-                ps.setInt(7, binId);
+                ps.setInt(4, itemId);
+                ps.setInt(5, binId);
                 int rows = ps.executeUpdate();
                 if (rows == 0) {
                     return ResponseEntity.badRequest().body(Map.of("error", "Stock level not found"));
@@ -227,19 +221,14 @@ public class StockLevelController {
 
                 // 5. Insert stock_level
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO stock_level (item_id, bin_id, quantity, low_stock_quantity, out_of_stock_quantity, stock_status, below_min_date) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                        "INSERT INTO stock_level (item_id, bin_id, quantity, low_stock_quantity, out_of_stock_quantity, stock_status) " +
+                        "VALUES (?, ?, ?, ?, ?, ?)")) {
                     ps.setInt(1, newItemId);
                     ps.setInt(2, binId);
                     ps.setInt(3, quantity);
                     ps.setInt(4, lowStockQty);
                     ps.setInt(5, outOfStockQty);
                     ps.setString(6, stockStatus);
-                    if ("HEALTHY".equals(stockStatus)) {
-                        ps.setNull(7, java.sql.Types.DATE);
-                    } else {
-                        ps.setDate(7, java.sql.Date.valueOf(LocalDate.now()));
-                    }
                     ps.executeUpdate();
                 }
 
@@ -259,6 +248,149 @@ public class StockLevelController {
                 System.out.println("[StockLevelController] New item added: id=" + newItemId + " name=" + itemName + " bin=" + binCode);
                 return ResponseEntity.ok(Map.of("success", true, "itemId", newItemId));
 
+            } catch (Exception ex) {
+                conn.rollback();
+                throw ex;
+            }
+        } catch (SQLException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * POST /stock-levels/purchase — purchase (OUT transaction): reduces quantity, updates status,
+     * triggers auto-reorder if OUT_OF_STOCK, deletes RECEIVED reorders if below low stock.
+     * Expects JSON: { itemId, binId, quantity }
+     */
+    @PostMapping("/purchase")
+    public ResponseEntity<?> purchase(@RequestBody Map<String, Object> body) {
+        int itemId   = ((Number) body.get("itemId")).intValue();
+        int binId    = ((Number) body.get("binId")).intValue();
+        int qty      = ((Number) body.get("quantity")).intValue();
+
+        try (Connection conn = warehouseDS.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                // 1. Get current quantity
+                int currentQty = 0;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT quantity FROM stock_level WHERE item_id = ? AND bin_id = ?")) {
+                    ps.setInt(1, itemId);
+                    ps.setInt(2, binId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (!rs.next()) {
+                            conn.rollback();
+                            return ResponseEntity.badRequest().body(Map.of("error", "Stock level not found"));
+                        }
+                        currentQty = rs.getInt("quantity");
+                    }
+                }
+
+                if (qty > currentQty) {
+                    conn.rollback();
+                    return ResponseEntity.badRequest().body(Map.of("error",
+                            "Insufficient stock. Available: " + currentQty + ", requested: " + qty));
+                }
+
+                int newQty = currentQty - qty;
+
+                // 2. Update stock_level quantity + status
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "UPDATE stock_level SET quantity = ?, " +
+                        "stock_status = CASE " +
+                        "  WHEN ? <= out_of_stock_quantity THEN 'OUT_OF_STOCK' " +
+                        "  WHEN ? <= low_stock_quantity THEN 'LOW_STOCK' " +
+                        "  ELSE 'HEALTHY' END " +
+                        "WHERE item_id = ? AND bin_id = ?")) {
+                    ps.setInt(1, newQty);
+                    ps.setInt(2, newQty);
+                    ps.setInt(3, newQty);
+                    ps.setInt(4, itemId);
+                    ps.setInt(5, binId);
+                    ps.executeUpdate();
+                }
+
+                // 3. Insert OUT stock_transaction
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO stock_transaction (transaction_id, transaction_type, quantity, transaction_date, item_id, bin_id) " +
+                        "VALUES ((SELECT COALESCE(MAX(t.transaction_id),0)+1 FROM stock_transaction t), 'OUT', ?, ?, ?, ?)")) {
+                    ps.setInt(1, qty);
+                    ps.setDate(2, java.sql.Date.valueOf(LocalDate.now()));
+                    ps.setInt(3, itemId);
+                    ps.setInt(4, binId);
+                    ps.executeUpdate();
+                }
+
+                // 4. Read back new status + bin capacity
+                String newStatus = null;
+                int binCapacity = 100;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT sl.stock_status, b.capacity FROM stock_level sl " +
+                        "JOIN bin b ON sl.bin_id = b.bin_id " +
+                        "WHERE sl.item_id = ? AND sl.bin_id = ?")) {
+                    ps.setInt(1, itemId);
+                    ps.setInt(2, binId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            newStatus = rs.getString("stock_status");
+                            binCapacity = rs.getInt("capacity");
+                        }
+                    }
+                }
+
+                // 5. Delete RECEIVED reorders if now below low stock
+                if ("OUT_OF_STOCK".equals(newStatus) || "LOW_STOCK".equals(newStatus)) {
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "DELETE FROM reorder WHERE item_id = ? AND status = 'RECEIVED'")) {
+                        ps.setInt(1, itemId);
+                        ps.executeUpdate();
+                    }
+                }
+
+                // 6. Auto reorder if OUT_OF_STOCK
+                boolean autoReordered = false;
+                if ("OUT_OF_STOCK".equals(newStatus)) {
+                    boolean activeExists = false;
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "SELECT COUNT(*) FROM reorder WHERE item_id = ? AND status IN ('PENDING','APPROVED','SHIPPED')")) {
+                        ps.setInt(1, itemId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (rs.next()) activeExists = rs.getInt(1) > 0;
+                        }
+                    }
+                    if (!activeExists) {
+                        Integer supplierId = null;
+                        try (PreparedStatement ps = conn.prepareStatement(
+                                "SELECT supplier_id FROM supplier_items WHERE item_id = ? LIMIT 1")) {
+                            ps.setInt(1, itemId);
+                            try (ResultSet rs = ps.executeQuery()) {
+                                if (rs.next()) supplierId = rs.getInt("supplier_id");
+                            }
+                        }
+                        int reorderQty = (int) Math.round(binCapacity * 0.75);
+                        try (PreparedStatement ps = conn.prepareStatement(
+                                "INSERT INTO reorder (reorder_id, item_id, supplier_id, reorder_quantity, reorder_date, trigger_type, status) " +
+                                "VALUES ((SELECT COALESCE(MAX(r.reorder_id),0)+1 FROM reorder r), ?, ?, ?, ?, 'AUTO', 'PENDING')")) {
+                            ps.setInt(1, itemId);
+                            if (supplierId != null) ps.setInt(2, supplierId);
+                            else ps.setNull(2, java.sql.Types.INTEGER);
+                            ps.setInt(3, Math.max(1, reorderQty));
+                            ps.setDate(4, java.sql.Date.valueOf(LocalDate.now()));
+                            ps.executeUpdate();
+                            autoReordered = true;
+                            System.out.println("[Purchase] Auto reorder created for itemId=" + itemId + " qty=" + reorderQty);
+                        }
+                    }
+                }
+
+                conn.commit();
+                System.out.println("[Purchase] item_id=" + itemId + " qty_sold=" + qty + " new_qty=" + newQty + " status=" + newStatus);
+                return ResponseEntity.ok(Map.of(
+                        "success", true,
+                        "newQuantity", newQty,
+                        "newStatus", String.valueOf(newStatus),
+                        "autoReordered", autoReordered
+                ));
             } catch (Exception ex) {
                 conn.rollback();
                 throw ex;
